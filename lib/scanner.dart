@@ -7,19 +7,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:scanner_test_rssi/file_service.dart';
 import 'package:scanner_test_rssi/list_view.dart';
 
-void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      home: DataSetHandeling(),
-    );
-  }
-}
 
 class DataSetHandeling extends StatefulWidget {
   @override
