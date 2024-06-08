@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:scanner_test_rssi/file_service.dart';
 import 'package:scanner_test_rssi/list_view.dart';
-
 
 class DataSetHandeling extends StatefulWidget {
   @override
@@ -15,7 +15,6 @@ class DataSetHandeling extends StatefulWidget {
 
 class _DataSetHandelingState extends State<DataSetHandeling> {
   List<ScanResult> scanResults = [];
-  Map<String, int> lastRssiValues = {};
   StreamSubscription<List<ScanResult>>? scanSubscription;
   bool isScanning = false;
   bool isAutoScanning = false;
@@ -39,7 +38,8 @@ class _DataSetHandelingState extends State<DataSetHandeling> {
     });
     scanSubscription = FlutterBluePlus.scanResults.listen((results) {
       for (var result in results) {
-        int index = scanResults.indexWhere((r) => r.device.id == result.device.id);
+        int index =
+            scanResults.indexWhere((r) => r.device.id == result.device.id);
         if (index >= 0) {
           if (scanResults[index].rssi != result.rssi) {
             scanResults[index] = result;
@@ -82,32 +82,43 @@ class _DataSetHandelingState extends State<DataSetHandeling> {
     return directory.path;
   }
 
-  Future<File> get _localFile async {
+  Future<String> get _localFilePath async {
     final path = await _localPath;
-    return File('$path/ble_data.txt');
-  }
-
-  Future<void> _writeDataBatch() async {
-    if (rssiChanges.isNotEmpty) {
-      final file = await _localFile;
-      await file.writeAsString(rssiChanges.join('\n') + '\n', mode: FileMode.writeOnlyAppend);
-      rssiChanges.clear();
-    }
+    return '$path/ble_data.txt';
   }
 
   void _logRssiChange(ScanResult result) {
-    String data = jsonEncode({
-      'device_name': result.device.name,
-      'device_id': result.device.id.toString(),
-      'rssi': result.rssi,
-      'timestamp': DateTime.now().toIso8601String(),
-      'classroom': classroom.isNotEmpty ? classroom : 'N/A',
-    });
+    String data = '${result.device.name},${result.device.id.toString()},${result.rssi},${DateTime.now().toIso8601String()},${classroom.isNotEmpty ? classroom : 'N/A'}';
     rssiChanges.add(data);
 
     // جدولة الكتابة إلى الملف بشكل دوري
     writeTimer?.cancel();
-    writeTimer = Timer(Duration(seconds: 5), _writeDataBatch);
+    writeTimer = Timer(Duration(seconds: 2), _writeDataBatch);
+  }
+
+  Future<void> _writeDataBatch() async {
+    if (rssiChanges.isNotEmpty) {
+      final dataToWrite = List<String>.from(rssiChanges); // Copy data to avoid modifying while writing
+      rssiChanges.clear();
+
+      // Using Isolate to write data
+      final ReceivePort receivePort = ReceivePort();
+      await Isolate.spawn(_writeDataInIsolate,
+          [await _localFilePath, dataToWrite, receivePort.sendPort]);
+      await receivePort.first;
+    }
+  }
+
+  static Future<void> _writeDataInIsolate(List<dynamic> args) async {
+    final filePath = args[0] as String;
+    final data = args[1] as List<String>;
+    final SendPort sendPort = args[2] as SendPort;
+
+    final file = File(filePath);
+    await file.writeAsString(data.join('\n') + '\n',
+        mode: FileMode.writeOnlyAppend);
+
+    sendPort.send(null); // Notify the main isolate that writing is done
   }
 
   Future<void> _saveData() async {
@@ -141,8 +152,8 @@ class _DataSetHandelingState extends State<DataSetHandeling> {
 
   Future<void> _resetData() async {
     try {
-      final file = await _localFile;
-      await file.writeAsString('');
+      final file = await _localFilePath;
+      await File(file).writeAsString('');
       setState(() {
         savedData = '';
       });
@@ -192,11 +203,13 @@ class _DataSetHandelingState extends State<DataSetHandeling> {
             padding: const EdgeInsets.all(8.0),
             child: ElevatedButton(
               onPressed: _toggleAutoScan,
-              child: Text(isAutoScanning ? 'Stop Auto Scan' : 'Start Auto Scan'),
+              child:
+                  Text(isAutoScanning ? 'Stop Auto Scan' : 'Start Auto Scan'),
             ),
           ),
           Expanded(
-            child: ListViewDevices(scanResults: scanResults, classroom: classroom),
+            child:
+                ListViewDevices(scanResults: scanResults, classroom: classroom),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
